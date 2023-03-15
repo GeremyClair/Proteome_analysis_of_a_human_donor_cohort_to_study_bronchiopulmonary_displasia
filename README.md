@@ -1,5 +1,5 @@
 # Proteome analysis of a human donor cohort to study bronchiopulmonary displasia
- Data analysis of the proteomics for the paper by Andrew Dylan et al.
+ Data analysis of the proteomics for the paper by Andrew Dylag et al.
 
 Please let us know if you need any assistance in executing or understanding this code.
 
