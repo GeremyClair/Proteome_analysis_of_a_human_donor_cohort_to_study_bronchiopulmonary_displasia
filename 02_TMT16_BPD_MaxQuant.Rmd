@@ -1,0 +1,367 @@
+---
+title: 'TMT_BPD_MaxQuant'
+author: Jongmin Woo, Geremy Clair
+date: October 12, 2022
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    theme : cerulean
+    code_folding: hide
+---
+
+```{r knit_options, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+knitr::opts_chunk$set(fig.width=10, fig.height=6, echo = TRUE, results = TRUE, warning = FALSE, message=FALSE) 
+options(repos=structure(c(CRAN="https://mirror.ibcp.fr/pub/CRAN/")))
+setwd("~/Documents/GitHub/Proteome_analysis_of_a_human_donor_cohort_to_study_bronchiopulmonary_displasia/")
+```
+
+The required libraries are loaded 
+- RomicsProcessor written by Geremy Clair (2023) is used to perform traceable transformation and statistics to the dataset. 
+- proteinMiniOn written by Geremy Clair (2023) is used to extract fasta information and to perform gene ontology and KEGG pathways enrichment analysis.
+- DT is used to display enrichment tables.
+
+```{r open_libraries}
+library(RomicsProcessor)
+library(ProteinMiniOn)
+library(DT)
+```
+
+# Fasta and protein ontologies download using 'Protein Mini-On'
+
+The fasta file was downloaded on october 12th, 2022 from Uniprot for the human proteome.
+```{r download_fasta}
+if(!file.exists("./03_output_files/Uniprot_Homo_sapiens_proteome_UP000005640_2022_10_12.fasta")){
+    download_UniProtFasta(proteomeID = "UP000005640",reviewed = F,export = TRUE, file="./03_output_files/Uniprot_Homo_sapiens_proteome_UP000005640_2022_10_12.fasta")
+}
+    UniProtFasta_info<-UniprotFastaParser(file = "./03_output_files/Uniprot_Homo_sapiens_proteome_UP000005640_2022_10_12.fasta")
+    write.csv(UniProtFasta_info, "./03_output_files/UniProtFasta_info.csv")
+```
+
+For each entry, 'Protein Mini-On' was use to download Gene Ontology (GO) terms and KEGG ids associated with the proteins. This upload was performed the exact same day as the download of the fasta file was done to ensure that the IDs will be identical as the ones present in the fasta file used).
+```{r UniProtTable_download}
+if(file.exists("./03_output_files/UniprotTable_Homo_sapiens_proteome_UP000005640_2022_10_12.csv")){
+  UniProtTable<-read.csv("./03_output_files/UniprotTable_Homo_sapiens_proteome_UP000005640_2022_10_12.csv")
+  }else{
+  download_UniProtTable(proteomeID = "UP000005640",reviewed = F)
+  write.csv(UniProtTable,("./03_output_files/UniprotTable_Homo_sapiens_proteome_UP000005640_2022_10_12.csv"),row.names=FALSE)
+  }
+```
+
+'Protein-Mini-on' was then used to generate a table (UniProtTable) containing the list of GOs and their associated protein IDs
+```{r UniProtTable_GO_generation}
+if(file.exists("./03_output_files/UniProtTable_GO.csv")){
+  UniProtTable_GO<-read.csv(file="./03_output_files/UniProtTable_GO.csv")
+}else{
+generate_UniProtTable_GO()
+write.csv(UniProtTable_GO,file="./03_output_files/UniProtTable_GO.csv",row.names=FALSE)
+}
+```
+
+'Protein-Mini-on' was used to download similar information from KEGG for the Pathways associated with each protein
+```{r UniProtTable_KEGG_generation}
+if(file.exists("./03_output_files/UniProtTable_KEGG.csv")){
+  UniProtTable_KEGG<-read.csv(file="./03_output_files/UniProtTable_KEGG.csv")
+}else{
+generate_UniProtTable_KEGG()
+write.csv(UniProtTable_KEGG,file="./03_output_files/UniProtTable_KEGG.csv",row.names=FALSE)
+}
+```
+
+'Protein-Mini-on' was used to download similar information from REACTOME for the Pathways associated with each protein
+```{r UniProtTable_REACTOME_generation}
+if(file.exists("./03_output_files/UniProtTable_REACTOME.csv")){
+  UniProtTable_REACTOME<-read.csv(file="./03_output_files/UniProtTable_REACTOME.csv")
+}else{
+generate_UniProtTable_REACTOME()
+write.csv(UniProtTable_REACTOME,file="./03_output_files/UniProtTable_REACTOME.csv",row.names=FALSE)
+}
+```
+
+# Load dataset
+The data and metadata were loaded and used to create a romics_object
+```{r romics}
+data_TMT<-extractMaxQuant(file = "./01_source_files/proteinGroups.txt",quantification_type = "TMT",cont.rm = T,site.rm = T,rev.rm = T)
+MaxQuant_IDs<-extractMaxQuantIDs(file = "./01_source_files/proteinGroups.txt",cont.rm = T,site.rm = T,rev.rm = T)
+
+metadata<-read.csv("01_source_files/metadata.csv")
+colnames(data_TMT)<-colnames(metadata)<-gsub(".bpd","_BPD",colnames(metadata))
+
+#the ids were modified to only contain a representative UniProt accession number (the rest of the information is stored in the mmaxQuant ID anyhow)
+data_TMT[,1]<-gsub(";.*","",data_TMT[,1])
+data_TMT[,1]<-gsub("sp\\|","",data_TMT[,1])
+data_TMT[,1]<-gsub("\\|.*","",data_TMT[,1])
+
+MaxQuant_IDs[,2]<-gsub(";.*","",MaxQuant_IDs[,2])
+MaxQuant_IDs[,2]<-gsub("sp\\|","",MaxQuant_IDs[,2])
+MaxQuant_IDs[,2]<-gsub("\\|.*","",MaxQuant_IDs[,2])
+
+MaxQuant_IDs<-cbind(representative_ID=data_TMT[,1], MaxQuant_IDs)
+
+romics_TMT<-romicsCreateObject(data_TMT,metadata,main_factor = "Disease_status")
+romics_TMT<-romicsSampleNameFromFactor(romics_TMT,factor = "Sample_name")
+```
+
+# Data preprocessing
+
+The missingness of the TMT16plex channels was plotted
+```{r plot missing}
+romics_TMT<-romicsZeroToMissing(romics_TMT)
+romicsPlotMissing(romics_TMT)
+```
+
+The data was log2 transformed and the boxplot were plotted
+```{r log2}
+romics_TMT<-log2transform(romics_TMT)
+distribBoxplot(romics_TMT)
+```
+
+The empty channels were removed
+```{r remove_emtpy}
+romics_TMT<-romicsSubset(romics_TMT,subset = c("Empty"),type = "drop",by = "level",factor = "Disease_status")
+distribBoxplot(romics_TMT)
+```
+and the data was median centered
+```{r medianCenter}
+romics_TMT<-medianNormSample(romics_TMT)
+distribBoxplot(romics_TMT)
+```
+
+Only the proteins for which 70 % of quantitative values were available for a single donor group were conserved
+```{r filter_missing}
+romics_TMT<-romicsFilterMissing(romics_TMT,percentage_completeness = 70,main_factor = "main")
+romicsPlotMissing(romics_TMT)
+```
+The missing values were then imputed using the Perseus method (tyranova et al. 2016)
+```{r missing_values}
+imputeMissingEval(romics_TMT)
+romics_TMT<-imputeMissing(romics_TMT)
+```
+
+The PCA was then plotted
+```{r PCA}
+#PCA plot prior batch effect correction
+pca_results<-romicsPCA(romics_TMT)
+indPCAplot(romics_TMT,plotType = "percentage",label = T)
+indPCAplot(romics_TMT,plotType = "individual",label = T)
+indPCA3D(romics_TMT)
+```
+# Statistics
+
+The means, stdev, and zscores were calculated.
+```{r mean_sd_Z}
+romics_TMT<-romicsMean(romics_TMT)
+romics_TMT<-romicsSd(romics_TMT)
+romics_TMT<-romicsZscores(romics_TMT)
+```
+
+ANOVA and Student's T.test were performed.
+```{r stats}
+romics_TMT<-romicsTtest(romics_TMT,reverse_order = T)
+romics_TMT<-romicsTtest(romics_TMT,reverse_order = F)
+romics_TMT<-romicsANOVA(romics_TMT)
+```
+
+The heatmap of the proteins passing the ANOVA was plotted, and extract hclust was extracted to perform enrichment analysis on the two main protein clusters.
+```{r heatmap_hclust_prot}
+romicsHeatmap(romics_TMT, ANOVA_filter = "p",p=0.05,sample_hclust = F,variable_hclust_number = 2)
+romics_TMT<-romicsVariableHclust(romics_TMT,clusters = 2,plot=F, ANOVA_filter = "p",p = 0.05)
+```
+
+T.test volcano plots were generated
+```{r volcanos}
+romicsVolcano(romics_TMT,min_fold_change = 0)
+```
+
+# Enrichment analyses
+
+The enrichments were performed on the two main clusters of the heatmap (ANOVA p<0.05)
+```{r ANOVA_clust_enrichment}
+enrichments_ANOVA<-romicsEnrichement(romics_TMT,cluster_filter = "hclust_clusters")
+enrichments_ANOVA_filtered<-enrichments_ANOVA[enrichments_ANOVA$pval<0.05&enrichments_ANOVA$fold_change>1,]
+datatable(enrichments_ANOVA)
+write.table(enrichments_ANOVA_filtered,file = "03_output_files/enrichments_ANOVA_filtered.txt",row.names = F,sep="\t")
+```
+
+Enrichment Analysis is performed on the proteins modulated in the different groups.
+```{r ttest_enr}
+up_eBPD_vs_ctrl<-enrfilter(romicsEnrichement(romics_TMT,statCol_filter = "eBPD_vs_ctrl_Ttest_p" ,statCol_text = "<0.05",statCol_filter2 = "log(eBPD/ctrl)",statCol_text2 = ">0",enrichment_function = "EASE",type = c("GO", "KEGG", "REACTOME") ),pval = 0.05,foldchange = 1,min_feature = 2)
+down_eBPD_vs_ctrl<-enrfilter(romicsEnrichement(romics_TMT,statCol_filter = "eBPD_vs_ctrl_Ttest_p" ,statCol_text = "<0.05",statCol_filter2 = "log(eBPD/ctrl)",statCol_text2 = "<0",enrichment_function = "EASE",type = c("GO", "KEGG", "REACTOME") ),pval = 0.05,foldchange = 1,min_feature = 2)
+
+up_eBPD_vs_hBPD<-enrfilter(romicsEnrichement(romics_TMT,statCol_filter = "eBPD_vs_hBPD_Ttest_p" ,statCol_text = "<0.05",statCol_filter2 = "log(eBPD/hBPD)",statCol_text2 = ">0",enrichment_function = "EASE",type = c("GO", "KEGG", "REACTOME") ),pval = 0.05,foldchange = 1,min_feature = 2)
+down_eBPD_vs_hBPD<-enrfilter(romicsEnrichement(romics_TMT,statCol_filter = "eBPD_vs_hBPD_Ttest_p" ,statCol_text = "<0.05",statCol_filter2 = "log(eBPD/hBPD)",statCol_text2 = "<0",enrichment_function = "EASE",type = c("GO", "KEGG", "REACTOME") ),pval = 0.05,foldchange = 1,min_feature = 2)
+
+up_hBPD_vs_ctrl<-enrfilter(romicsEnrichement(romics_TMT,statCol_filter = "hBPD_vs_ctrl_Ttest_p"  ,statCol_text = "<0.05",statCol_filter2 = "log(hBPD/ctrl)" ,statCol_text2 = ">0",enrichment_function = "EASE",type = c("GO", "KEGG", "REACTOME") ),pval = 0.05,foldchange = 1,min_feature = 2)
+down_hBPD_vs_ctrl<-enrfilter(romicsEnrichement(romics_TMT,statCol_filter = "hBPD_vs_ctrl_Ttest_p"  ,statCol_text = "<0.05",statCol_filter2 = "log(hBPD/ctrl)" ,statCol_text2 = "<0",enrichment_function = "EASE",type = c("GO", "KEGG", "REACTOME") ),pval = 0.05,foldchange = 1,min_feature = 2)
+
+enrichments_ttest<-rbind(up_eBPD_vs_ctrl,down_eBPD_vs_ctrl,up_eBPD_vs_hBPD,down_eBPD_vs_hBPD,up_hBPD_vs_ctrl,down_hBPD_vs_ctrl)
+
+DT::datatable(enrichments_ttest)
+
+write.csv(enrichments_ttest,file="03_output_files/Enrichment_Ttests.csv",row.names = F)
+```
+
+# Matrisome
+We used the matrisome DB to identify the proteins known to be associated with the extracellular matrix, heatmaps and volcano plots were generated
+```{r terms of interest}
+
+print("MatrisomeDB")
+d<-featureSubset(romics_TMT,t(read.csv(file = "01_source_files/MatrisomeDB_naba_2016_matrix_biology_human_uniprot.csv")))
+romicsHeatmap(d,RowSideColor = "eBPD_vs_ctrl_Ttest_p",labRow=rownames(d$data),sample_hclust = F)
+romicsHeatmap(d,labRow = rownames(d$data),ANOVA_filter = "p",p = 0.05)
+
+romicsVolcano(d,plot=4,min_fold_change = 0,p_type = "p")
+
+results_matrixDB<-romicsExportData(d,statistics = T,missing_data = T)
+write.csv(results_matrixDB,file = "03_output_files/results_subset_matrisomeDB.csv")
+```
+
+# Proteins of interest
+
+Some single protein plots were generated for various proteins of interest
+## Epithelial cells
+```{r Epi_markers}
+Figs<-romics_TMT
+
+p1<-singleVariablePlot(romics_object = Figs,variable ="P16422",y_bracket_pos = 0.2,title = "EPCAM")
+
+print("AT1 markers")
+p1<-singleVariablePlot(romics_object = Figs,variable ="O95171",y_bracket_pos = 0.2,title = "SCEL")
+p2<-singleVariablePlot(romics_object = Figs,variable ="Q15109",y_bracket_pos = 0.2,title = "AGER/RAGE")
+p3<-singleVariablePlot(romics_object = Figs,variable ="Q8NFJ5",y_bracket_pos = 0.2,title = "GPRC5A")
+p4<-singleVariablePlot(romics_object = Figs,variable ="P55087",y_bracket_pos = 0.2,title = "AQP4")
+grid.arrange(p1,p2,ncol=2)
+grid.arrange(p3,p4,ncol=2)
+
+print("AT2 markers")
+p1<-singleVariablePlot(romics_object = Figs,variable ="Q99758",y_bracket_pos = 0.2,title = "ABCA3")
+p2<-singleVariablePlot(romics_object = Figs,variable ="Q9UQV4",y_bracket_pos = 0.2,title = "LAMP3")
+p3<-singleVariablePlot(romics_object = Figs,variable ="P11686",y_bracket_pos = 0.2,title = "SFTPC")
+p4<-singleVariablePlot(romics_object = Figs,variable ="O96009",y_bracket_pos = 0.2,title = "NAPSA")
+grid.arrange(p1,p2,ncol=2)
+grid.arrange(p3,p4,ncol=2)
+
+print("airway markers")
+p1<-singleVariablePlot(romics_object = Figs,variable ="P11684",y_bracket_pos = 0.2,title = "SCGB1A1/Uteroglobin")
+p2<-singleVariablePlot(romics_object = Figs,variable ="Q13938",y_bracket_pos = 0.2,title = "CAPS")
+grid.arrange(p1,p2,ncol=2)
+
+
+print("serous cells")
+p1<-singleVariablePlot(romics_object = Figs,variable ="P02788",y_bracket_pos = 0.2,title = "LTF")
+```
+## Endothelial cells
+
+```{r Endo_markers}
+
+print("General endothelial markers")
+p1<-singleVariablePlot(romics_object = Figs,variable ="P16284",y_bracket_pos = 0.2,title = "PECAM1")
+p2<-singleVariablePlot(romics_object = Figs,variable ="P12830",y_bracket_pos = 0.2,title = "CDH1")
+p3<-singleVariablePlot(romics_object = Figs,variable ="O75636",y_bracket_pos = 0.2,title = "FCN3")
+p4<-singleVariablePlot(romics_object = Figs,variable ="P17948",y_bracket_pos = 0.2,title = "FLT1")
+p5<-singleVariablePlot(romics_object = Figs,variable ="P12821",y_bracket_pos = 0.2,title = "ACE")
+p6<-singleVariablePlot(romics_object = Figs,variable ="P11308",y_bracket_pos = 0.2,title = "ERG")
+grid.arrange(p1,p2,ncol=2)
+grid.arrange(p3,p4,ncol=2)
+grid.arrange(p5,p6,ncol=2)
+
+print("Cap cells")
+p1<-singleVariablePlot(romics_object = Figs,variable ="P00918",y_bracket_pos = 0.2,title = "CA2")
+p2<-singleVariablePlot(romics_object = Figs,variable ="P24530",y_bracket_pos = 0.2,title = "EDNRB")
+p3<-singleVariablePlot(romics_object = Figs,variable ="Q9BXM0",y_bracket_pos = 0.2,title = "PRX")
+grid.arrange(p1,p2,ncol=2)
+grid.arrange(p3,ncol=2)
+
+print("Lymphatics")
+p1<-singleVariablePlot(romics_object = Figs,variable ="Q9Y5Y7",y_bracket_pos = 0.2,title = "LYVE1")
+p2<-singleVariablePlot(romics_object = Figs,variable ="Q86Y34",y_bracket_pos = 0.2,title = "ADGRG3")
+grid.arrange(p1,p2,ncol=2)
+```
+## Mesenchymal markers
+
+```{r mesenchymal_markers}
+print("Vimentin")
+p1<-singleVariablePlot(romics_object = Figs,variable ="P08670",y_bracket_pos = 0.2,title = "VIM")
+grid.arrange(p1,ncol=2)
+
+print("Smooth muscle markers")
+p1<-singleVariablePlot(romics_object = Figs,variable ="Q01995",y_bracket_pos = 0.2,title = "TAGLN")
+p2<-singleVariablePlot(romics_object = Figs,variable ="O75112",y_bracket_pos = 0.2,title = "LDB3")
+grid.arrange(p1,p2,ncol=2)
+
+print("Fibroblasts markers")
+p1<-singleVariablePlot(romics_object = Figs,variable ="P04216",y_bracket_pos = 0.2,title = "THY1")
+p2<-singleVariablePlot(romics_object = Figs,variable ="Q7Z5L7",y_bracket_pos = 0.2,title = "PODN")
+p3<-singleVariablePlot(romics_object = Figs,variable ="O14498",y_bracket_pos = 0.2,title = "ISLR")
+grid.arrange(p1,p2,ncol=2)
+grid.arrange(p3,ncol=2)
+
+print("AF2")
+p1<-singleVariablePlot(romics_object = Figs,variable ="Q13361",y_bracket_pos = 0.2,title = "MFAP5")
+grid.arrange(p1,ncol=2)
+
+```
+
+## Immune cells
+
+```{r}
+
+print("Immune cells markers")
+p1<-singleVariablePlot(romics_object = Figs,variable ="P08575",y_bracket_pos = 0.2,title = "PTPRC/CD45")
+grid.arrange(p1,ncol=2)
+
+print("Mast cells markers")
+p1<-singleVariablePlot(romics_object = Figs,variable ="P15088",y_bracket_pos = 0.2,title = "CPA3")
+p2<-singleVariablePlot(romics_object = Figs,variable ="P23946",y_bracket_pos = 0.2,title = "CMA1")
+p3<-singleVariablePlot(romics_object = Figs,variable ="O00534",y_bracket_pos = 0.2,title = "VWA5A")
+grid.arrange(p1,p2,ncol=2)
+grid.arrange(p3,ncol=2)
+
+print("Macrophages")
+p1<-singleVariablePlot(romics_object = Figs,variable ="Q9UEW3",y_bracket_pos = 0.2,title = "MARCO")
+p2<-singleVariablePlot(romics_object = Figs,variable ="P61626",y_bracket_pos = 0.2,title = "LYZ")
+p3<-singleVariablePlot(romics_object = Figs,variable ="P40121",y_bracket_pos = 0.2,title = "CAPG")
+p4<-singleVariablePlot(romics_object = Figs,variable ="P22897",y_bracket_pos = 0.2,title = "MRC1")
+grid.arrange(p1,p2,ncol=2)
+grid.arrange(p3,p4,ncol=2)
+```
+## Other proteins of interest
+
+```{r}
+print("Iron transport and ferroptosis - see https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9032171/")
+p1<-singleVariablePlot(romics_object = Figs,variable ="O95352",y_bracket_pos = 0.2,title = "ATG7")
+p2<-singleVariablePlot(romics_object = Figs,variable ="P00450",y_bracket_pos = 0.2,title = "CP")
+p3<-singleVariablePlot(romics_object = Figs,variable ="P02794",y_bracket_pos = 0.2,title = "FTH1")
+p4<-singleVariablePlot(romics_object = Figs,variable ="P02792",y_bracket_pos = 0.2,title = "FTL")
+p5<-singleVariablePlot(romics_object = Figs,variable ="P02787",y_bracket_pos = 0.2,title = "TF")
+p6<-singleVariablePlot(romics_object = Figs,variable ="P16050",y_bracket_pos = 0.2,title = "ALOX15")
+p7<-singleVariablePlot(romics_object = Figs,variable ="Q86U28",y_bracket_pos = 0.2,title = "ISCA2")
+grid.arrange(p1,p2,ncol=2)
+grid.arrange(p3,p4,ncol=2)
+grid.arrange(p5,p6,ncol=2)
+
+
+print("tight junction")
+p1<-singleVariablePlot(romics_object = Figs,variable ="Q07157",y_bracket_pos = 0.2,title = "TJP1")
+p2<-singleVariablePlot(romics_object = Figs,variable ="Q9UDY2",y_bracket_pos = 0.2,title = "TJP2")
+p3<-singleVariablePlot(romics_object = Figs,variable ="O00501",y_bracket_pos = 0.2,title = "CLDN5")
+p4<-singleVariablePlot(romics_object = Figs,variable ="Q16625",y_bracket_pos = 0.2,title = "OCLN")
+p5<-singleVariablePlot(romics_object = Figs,variable ="Q0VF96",y_bracket_pos = 0.2,title = "CGNL1")
+p6<-singleVariablePlot(romics_object = Figs,variable ="Q03135",y_bracket_pos = 0.2,title = "CAV1")
+
+grid.arrange(p1,p2,ncol=2)
+grid.arrange(p3,p4,ncol=2)
+grid.arrange(p5,p6,ncol=2)
+```
+
+# Export the data
+The data was exported for further exploration and to serve as supplementary dataset.
+```{r}
+results<-romicsExportData(romics_TMT,statistics = T,missing_data = T)
+representativeID=gsub("//;.*","",rownames(results))
+results<-merge(results,MaxQuant_IDs,by.x=0, by.y="protein.ids")
+results<-cbind(results,representativeID=representativeID)
+results<-merge(results,UniProtFasta_info,by.x = "representativeID",by.y="Uniprot_accession")
+write.csv(results, file="./03_output_files/results_with_stat.csv")
+```
